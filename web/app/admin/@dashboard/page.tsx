@@ -1,16 +1,20 @@
 'use client'
 
-import { useState } from "react"
-import { SearchFilterBar } from "@/components/ui/search-filter-bar"
+import { useState, useEffect } from "react"
+// import { SearchFilterBar } from "@/components/ui/search-filter-bar"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { StatsCard } from "@/components/ui/stats-card"
 import { DataTable } from "@/components/ui/data-table"
 import { ColumnDef } from "@tanstack/react-table"
 import { PaginationControls } from "@/components/ui/pagination-controls"
 import { StampItem } from "@/types/stamp"
-import { usePassportsStamps } from "@/contexts/passports-stamps-context"
+import { useApp } from "@/contexts/app-context"
 import { PassportItem } from "@/types/passport"
 import Link from "next/link"
+import { DbUserResponse } from "@/types/userProfile"
+import { StampDistributionChart } from "@/components/ui/stamp-distribution-chart"
+import { PointsDistributionChart } from "@/components/ui/points-distribution-chart"
+import { UserGrowthChart } from "@/components/ui/user-growth-chart"
 
 const stampColumns: ColumnDef<StampItem>[] = [
   {
@@ -48,106 +52,117 @@ const stampColumns: ColumnDef<StampItem>[] = [
   },
 ]
 
-const passportColumns: ColumnDef<PassportItem>[] = [
+const passportColumns: ColumnDef<DbUserResponse>[] = [
   {
-    accessorKey: "id",
-    header: "ID",
+    accessorKey: "address",
+    header: "Address",
     cell: ({ row }) => {
-      return <span className="text-sm">{row.original.id.slice(0, 6)}...</span>
+      return <span className="text-sm">{row.original.address.slice(0, 6)}...</span>
     }
   },
   {
-    accessorKey: "sender",
-    header: "Sender",
+    accessorKey: "name",
+    header: "Name",
     cell: ({ row }) => {
       return (
         <div 
           className="max-w-xs cursor-pointer underline text-blue-600 truncate" 
         >
-          <Link href={`/user/${row.original.sender}`} target="_blank">{row.original.sender}</Link>
+          <Link href={`/user/${row.original.address}`} target="_blank">{row.original.name}</Link>
         </div>
       )
     }
   },
   {
-    accessorKey: "timestamp",
-    header: () => <div className="text-right text-nowrap">Created At</div>,
+    accessorKey: "points",
+    header: () => <div className="text-right text-nowrap">Points</div>,
     cell: ({ row }) => {
-      const createdAt = new Date(row.original.timestamp ?? 0).toLocaleDateString()
-      return <div className="text-nowrap text-right">{createdAt}</div>
+      return <div className="text-nowrap text-right">{row.original.points}</div>
+    }
+  },
+  {
+    accessorKey: "stamp_count",
+    header: () => <div className="text-right text-nowrap">Stamps</div>,
+    cell: ({ row }) => {
+      return <div className="text-nowrap text-right">{row.original.stamp_count}</div>
     }
   },
 ]
 
-// 定义 Tab 值的类型
 type TabValue = 'stamps' | 'passports'
 
-// 修改 getCurrentConfig 的返回类型
 type TableConfig<T> = {
   data: T[]
   columns: ColumnDef<T, unknown>[]
 }
 
-// 简化排序类型
-type SortDirection = 'asc' | 'desc'
-
 export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState<TabValue>('stamps')
-  const [currentPage, setCurrentPage] = useState(1)
-  const [searchQuery, setSearchQuery] = useState('')
-  // 简化排序状态
-  const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
-  const { stamps, passport } = usePassportsStamps()
+  const [statistics, setStatistics] = useState<{
+    totalUsers: number;
+    totalStamps: number;
+    totalPoints: number;
+    stampsDistribution: { range: string; count: number }[];
+    pointsDistribution: { range: string; count: number }[];
+    growthByDay: { date: string; count: number }[];
+  } | null>(null);
+  
+  const { 
+    stamps, 
+    users,
+    pagination,
+    fetchUsers,
+    usersLoading
+  } = useApp()
 
-  const ITEMS_PER_PAGE = 7
+  useEffect(() => {
+    const fetchStatistics = async () => {
+      try {
+        const response = await fetch('/api/user/statistics');
+        const data = await response.json();
+        setStatistics(data);
+      } catch (error) {
+        console.error('Failed to fetch statistics:', error);
+      }
+    };
 
-  // 修改 getCurrentConfig 函数
-  const getCurrentConfig = (): TableConfig<StampItem | PassportItem> => {
+    fetchStatistics();
+  }, []);
+
+  const getCurrentConfig = (): TableConfig<StampItem | PassportItem | DbUserResponse> => {
     switch (activeTab) {
       case 'stamps':
         return {
           data: stamps ?? [],
-          columns: stampColumns as ColumnDef<StampItem | PassportItem, unknown>[]
+          columns: stampColumns as ColumnDef<StampItem | PassportItem | DbUserResponse, unknown>[]
         }
       case 'passports':
         return {
-          data: passport ?? [],
-          columns: passportColumns as ColumnDef<StampItem | PassportItem, unknown>[]
-        }
+          data: users ?? [],
+          columns: passportColumns as ColumnDef<StampItem | PassportItem | DbUserResponse, unknown>[]
+        } 
     }
   }
 
   const { data, columns } = getCurrentConfig()
 
-  // 简化排序处理函数
-  const handleFilterChange = (value: string) => {
-    setSortDirection(value === 'createdAt↑' ? 'asc' : 'desc')
+  // const handleSearch = () => {
+  //   if (activeTab === 'passports') {
+  //     fetchUsers(1, pagination.itemsPerPage)
+  //   }
+  // }
+
+  const handlePageChange = (page: number) => {
+    if (activeTab === 'passports') {
+      fetchUsers(page, pagination.itemsPerPage)
+    }
   }
 
-  // 简化数据过滤和排序逻辑
-  const filteredData = data
-    .filter(item =>
-      'name' in item && item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      'id' in item && item.id.includes(searchQuery)
-    )
-    .sort((a, b) => {
-      const dateA = new Date('timestamp' in a && a.timestamp ? a.timestamp : 0).getTime()
-      const dateB = new Date('timestamp' in b && b.timestamp ? b.timestamp : 0).getTime()
-      return sortDirection === 'asc' ? dateA - dateB : dateB - dateA
-    })
-
-  // 处理分页
-  const totalPages = Math.ceil(filteredData.length / ITEMS_PER_PAGE)
-  const paginatedData = filteredData.slice(
-    (currentPage - 1) * ITEMS_PER_PAGE,
-    currentPage * ITEMS_PER_PAGE
-  )
-
-  // 标签页切换时重置分页
   const handleTabChange = (value: string) => {
-    // 类型断言确保 value 是有效的 TabValue
     setActiveTab(value as TabValue)
-    setCurrentPage(1)
+    if (value === 'passports') {
+      fetchUsers(1, pagination.itemsPerPage)
+    }
   }
 
   return (
@@ -155,15 +170,24 @@ export default function AdminDashboard() {
       <div className="lg:flex lg:justify-between lg:items-center space-y-6 lg:space-y-0 pb-6">
         <h1 className="text-4xl font-bold">Dashboard</h1>
 
-        {/* Stats Cards */}
         <div className="grid grid-cols-2 gap-4">
           <StatsCard value={stamps?.length ?? 0} label="Stamps" />
-          <StatsCard value={passport?.length ?? 0} label="Passports" />
+          <StatsCard value={statistics?.totalUsers ?? 0} label="Total Users" />
         </div>
       </div>
 
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        {statistics && (
+          <>
+            <PointsDistributionChart data={statistics.pointsDistribution} />
+            <StampDistributionChart data={statistics.stampsDistribution} />
+            <div className="lg:col-span-2">
+              <UserGrowthChart data={statistics.growthByDay} />
+            </div>
+          </>
+        )}
+      </div>
 
-      {/* Tabs */}
       <Tabs
         value={activeTab}
         onValueChange={handleTabChange}
@@ -181,40 +205,39 @@ export default function AdminDashboard() {
                 <TabsTrigger value="passports">Passports</TabsTrigger>
               </TabsList>
             </div>
-            <SearchFilterBar
+            {/* <SearchFilterBar
               searchPlaceholder="Search by name or ID"
-              onSearchChange={setSearchQuery}
-              filterOptions={[
-                {
-                  value: "createdAt↑",
-                  label: "Created At ↑"
-                },
-                {
-                  value: "createdAt↓",
-                  label: "Created At ↓"
-                }
-              ]}
-              onFilterChange={handleFilterChange}
+              onSearchChange={handleSearch}
+            /> */}
+            {activeTab === 'passports' && (
+              <div className="hidden lg:block lg:ml-auto">
+                <PaginationControls
+                  currentPage={pagination.currentPage}
+                  totalPages={pagination.totalPages}
+                  onPageChange={handlePageChange}
+                />
+              </div>
+            )}
+          </div>
+          {(activeTab === 'passports' && usersLoading) ? (
+            <div className="flex justify-center items-center h-64">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900"></div>
+            </div>
+          ) : (
+            <DataTable
+              columns={columns as ColumnDef<Record<string, unknown>, unknown>[]}
+              data={data as Record<string, unknown>[]}
             />
-            <div className="hidden lg:block lg:ml-auto">
+          )}
+          {activeTab === 'passports' && (
+            <div className="lg:hidden">
               <PaginationControls
-                currentPage={currentPage}
-                totalPages={totalPages}
-                onPageChange={setCurrentPage}
+                currentPage={pagination.currentPage}
+                totalPages={pagination.totalPages}
+                onPageChange={handlePageChange}
               />
             </div>
-          </div>
-          <DataTable
-            columns={columns as ColumnDef<Record<string, unknown>, unknown>[]}
-            data={paginatedData as Record<string, unknown>[]}
-          />
-          <div className="lg:hidden">
-            <PaginationControls
-              currentPage={currentPage}
-              totalPages={totalPages}
-              onPageChange={setCurrentPage}
-            />
-          </div>
+          )}
         </div>
       </Tabs>
     </div>
